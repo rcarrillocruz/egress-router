@@ -220,7 +220,7 @@ func cmdCheck(args *skel.CmdArgs) error {
 		return fmt.Errorf("Required prevResult missing")
 	}
 
-	if err := version.ParsePrevResult(n); err != nil {
+	if err := version.ParsePrevResult(&n.NetConf); err != nil {
 		return err
 	}
 
