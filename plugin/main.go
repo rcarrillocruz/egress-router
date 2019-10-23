@@ -48,6 +48,14 @@ type IPAMEnvArgs struct {
 	GATEWAY types.UnmarshallableString `json:"gateway,omitempty"`
 }
 
+type IPAMConfig struct {
+	Name      string
+	Type      string         `json:"type"`
+	Routes    []*types.Route `json:"routes"`
+	Addresses []Address      `json:"addresses,omitempty"`
+	DNS       types.DNS      `json:"dns"`
+}
+
 func loadNetConf(cluster *ClusterConf, bytes []byte) (*NetConf, error) {
 	conf := &NetConf{}
 	if err := json.Unmarshal(bytes, conf); err != nil {
