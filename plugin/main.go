@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 
 	"github.com/containernetworking/cni/pkg/skel"
@@ -89,10 +90,21 @@ func fillNetConfDefaults(conf *NetConf, cluster *ClusterConf) error {
 }
 
 func validateNetConf(conf *NetConf) error {
+	cniArgs := os.Getenv("CNI_ARGS")
+	if cniArgs == "" {
+		return fmt.Errorf("missing or unset CNI_ARGS")
+	}
+	mapArgs := make(map[string]string)
+	for _, arg := range strings.Split(cniArgs, ";") {
+		parts := strings.Split(arg, "=")
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid CNI_ARG '%s'", arg)
+		}
+		mapArgs[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+	}
 	if conf.IP == nil && conf.PodIP == nil && conf.IPConfig == nil {
 		return fmt.Errorf("exactly 1 of 'ip', 'podIP', or 'ipConfig' must be set")
 	}
-
 	if conf.IPConfig != nil {
 		if conf.IP != nil || conf.PodIP != nil {
 			return fmt.Errorf("exactly 1 of 'ip', 'podIP', or 'ipConfig' must be set")
@@ -108,15 +120,15 @@ func validateNetConf(conf *NetConf) error {
 			return fmt.Errorf("exactly 1 of 'ip', 'podIP', or 'ipConfig' must be set")
 		}
 		for podName, ipc := range conf.PodIP {
-			if podNameMatches(podName, FIXME_THIS_POD_NAME) {
+			if podName == mapArgs["K8S_POD_NAME"] {
 				if conf.IP != nil {
-					return fmt.Errorf("multiple configurations in 'podIP' matching pod name %q", FIXME_THIS_POD_NAME)
+					return fmt.Errorf("multiple configurations in 'podIP' matching pod name %q", mapArgs["K8S_POD_NAME"])
 				}
 				conf.IP = &ipc
 			}
 		}
 		if conf.IP == nil {
-			return fmt.Errorf("no configuration in 'podIP' matching pod name %q", FIXME_THIS_POD_NAME)
+			return fmt.Errorf("no configuration in 'podIP' matching pod name %q", mapArgs["K8S_POD_NAME"])
 		}
 	}
 	if err := validateIP(conf.IP); err != nil {
