@@ -41,6 +41,13 @@ type IPConfig struct {
 	Overrides *IP    `json:"overrides"`
 }
 
+type Address struct {
+	AddressStr string `json:"address"`
+	Gateway    net.IP `json:"gateway,omitempty"`
+	Address    net.IPNet
+	Version    string
+}
+
 type IPAMEnvArgs struct {
 	types.CommonArgs
 
