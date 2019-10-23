@@ -135,7 +135,7 @@ func validateIP(ip *IP) error {
 		var ipaddr *net.IP
 		_, net, err := net.ParseCIDR(addr)
 		if err == nil {
-			ipaddr = net.IP
+			ipaddr = &net.IP
 		} else {
 			ipaddr = net.ParseIP(addr)
 		}
