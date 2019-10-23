@@ -210,7 +210,7 @@ func cmdCheck(args *skel.CmdArgs) error {
 	}
 
 	// Get PrevResult from stdin... store in RawPrevResult
-	n, _, err := loadNetConf(args.StdinData)
+	n, err := loadNetConf(&ClusterConf{}, args.StdinData)
 	if err != nil {
 		return err
 	}
