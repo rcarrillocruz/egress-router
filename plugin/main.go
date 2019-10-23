@@ -61,6 +61,10 @@ type Address struct {
 	Version    string
 }
 
+type IPAMArgs struct {
+	IPs []string `json:"ips"`
+}
+
 type IPAMEnvArgs struct {
 	types.CommonArgs
 
