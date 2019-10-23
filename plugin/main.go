@@ -133,11 +133,11 @@ func validateIP(ip *IP) error {
 	var got4, got6 bool
 	for _, addr := range ip.Addresses {
 		var ipaddr *net.IP
-		_, net, err := net.ParseCIDR(addr)
+		ip, ipnet, err := net.ParseCIDR(addr)
 		if err == nil {
-			ipaddr = &net.IP
+			ipaddr = &ip
 		} else {
-			ipaddr = net.ParseIP(addr)
+			ipaddr = &net.ParseIP(addr)
 		}
 		if ipaddr == nil {
 			return fmt.Errorf("%q is not a valid IP address", addr)
