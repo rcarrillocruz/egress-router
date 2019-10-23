@@ -41,6 +41,19 @@ type IPConfig struct {
 	Overrides *IP    `json:"overrides"`
 }
 
+type Net struct {
+	Name       string      `json:"name"`
+	CNIVersion string      `json:"cniVersion"`
+	IPAM       *IPAMConfig `json:"ipam"`
+
+	RuntimeConfig struct {
+		IPs []string `json:"ips,omitempty"`
+	} `json:"runtimeConfig,omitempty"`
+	Args *struct {
+		A *IPAMArgs `json:"cni"`
+	} `json:"args"`
+}
+
 type Address struct {
 	AddressStr string `json:"address"`
 	Gateway    net.IP `json:"gateway,omitempty"`
