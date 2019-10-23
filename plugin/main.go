@@ -41,6 +41,13 @@ type IPConfig struct {
 	Overrides *IP    `json:"overrides"`
 }
 
+type IPAMEnvArgs struct {
+	types.CommonArgs
+
+	IP      types.UnmarshallableString `json:"ip,omitempty"`
+	GATEWAY types.UnmarshallableString `json:"gateway,omitempty"`
+}
+
 func loadNetConf(cluster *ClusterConf, bytes []byte) (*NetConf, error) {
 	conf := &NetConf{}
 	if err := json.Unmarshal(bytes, conf); err != nil {
