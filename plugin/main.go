@@ -23,9 +23,9 @@ type NetConf struct {
 	InterfaceType string            `json:"interfaceType"`
 	InterfaceArgs map[string]string `json:"interfaceArgs"`
 
-	IP          *IP           `json:"ip"`
-	PodIP       map[string]IP `json:"podIP"`
-	IPConfig    *IPConfig     `json:"ipConfig"`
+	IP       *IP           `json:"ip"`
+	PodIP    map[string]IP `json:"podIP"`
+	IPConfig *IPConfig     `json:"ipConfig"`
 }
 
 type IP struct {
@@ -51,6 +51,8 @@ func loadNetConf(cluster *ClusterConf, bytes []byte) (*NetConf, error) {
 	if err := validateNetConf(conf); err != nil {
 		return nil, err
 	}
+
+	return conf, nil
 }
 
 func fillNetConfDefaults(conf *NetConf, cluster *ClusterConf) error {
