@@ -82,8 +82,10 @@ func fillNetConfDefaults(conf *NetConf, cluster *ClusterConf) error {
 			}
 		}
 	default:
-		return nil, fmt.Errorf("unrecognized interfaceType %q", conf.InterfaceType)
+		return fmt.Errorf("unrecognized interfaceType %q", conf.InterfaceType)
 	}
+
+	return nil
 }
 
 func validateNetConf(conf *NetConf) error {
