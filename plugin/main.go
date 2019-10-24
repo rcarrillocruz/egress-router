@@ -149,7 +149,7 @@ func validateNetConf(conf *NetConf) error {
 			return fmt.Errorf("exactly 1 of 'ip', 'podIP', or 'ipConfig' must be set")
 		}
 		var err error
-		conf.IP, conf.PodIP, err = loadIPConfig(conf.IPConfig)
+		conf.IP, conf.PodIP, err = loadIPConfig(conf.IPConfig, mapArgs["K8S_POD_NAMESPACE"])
 		if err != nil {
 			return err
 		}
@@ -223,9 +223,9 @@ func validateIP(ip *IP) error {
 	return nil
 }
 
-func loadIPConfig(ipc *IPConfig) (*IP, map[string]IP, error) {
+func loadIPConfig(ipc *IPConfig, podNamespace string) (*IP, map[string]IP, error) {
 	if ipc.Namespace == "" {
-		ipc.Namespace = FIXME_POD_NAMESPACE
+		ipc.Namespace = podNamespace
 	}
 
 	cm := FIXME_GET_CONFIG_MAP
