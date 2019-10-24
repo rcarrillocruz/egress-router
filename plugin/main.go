@@ -188,7 +188,8 @@ func validateIP(ip *IP) error {
 		if err == nil {
 			ipaddr = &ip
 		} else {
-			ipaddr = &net.ParseIP(addr)
+			tmp := net.ParseIP(addr)
+			ipaddr = &tmp
 		}
 		if ipaddr == nil {
 			return fmt.Errorf("%q is not a valid IP address", addr)
