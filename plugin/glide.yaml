@@ -20,6 +20,8 @@ import:
   version: ^1.0.0
 - package: github.com/vishvananda/netlink
   version: ^1.0.0
+- package: k8s.io/client-go
+  version: kubernetes-1.16.0
 testImport:
 - package: github.com/onsi/ginkgo
   version: ^1.10.2

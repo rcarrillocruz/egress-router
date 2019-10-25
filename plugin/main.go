@@ -12,6 +12,9 @@ import (
 	types020 "github.com/containernetworking/cni/pkg/types/020"
 	"github.com/containernetworking/cni/pkg/types/current"
 	"github.com/containernetworking/cni/pkg/version"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 type ClusterConf struct {
@@ -106,7 +109,7 @@ func fillNetConfDefaults(conf *NetConf, cluster *ClusterConf) error {
 
 	switch conf.InterfaceType {
 	case "macvlan":
-		for key, value := range conf.InterfaceArgs {
+		for key, _ := range conf.InterfaceArgs {
 			if key == "master" || key == "mode" {
 				continue
 			} else {
@@ -114,7 +117,7 @@ func fillNetConfDefaults(conf *NetConf, cluster *ClusterConf) error {
 			}
 		}
 	case "ipvlan":
-		for key, value := range conf.InterfaceArgs {
+		for key, _ := range conf.InterfaceArgs {
 			if key == "master" {
 				continue
 			} else {
@@ -184,7 +187,7 @@ func validateIP(ip *IP) error {
 	var got4, got6 bool
 	for _, addr := range ip.Addresses {
 		var ipaddr *net.IP
-		ip, ipnet, err := net.ParseCIDR(addr)
+		ip, _, err := net.ParseCIDR(addr)
 		if err == nil {
 			ipaddr = &ip
 		} else {
@@ -229,7 +232,19 @@ func loadIPConfig(ipc *IPConfig, podNamespace string) (*IP, map[string]IP, error
 		ipc.Namespace = podNamespace
 	}
 
-	cm := FIXME_GET_CONFIG_MAP
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get in-cluster config")
+	}
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get Kubernetes clientset")
+	}
+
+	cm, err := clientset.CoreV1().ConfigMaps(ipc.Namespace).Get(ipc.Name, metav1.GetOptions{})
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get ConfigMap on namespace %s with name %s", ipc.Namespace, ipc.Name)
+	}
 
 	if cm.Data["ip"] != "" {
 		if cm.Data["podIP"] != "" {
