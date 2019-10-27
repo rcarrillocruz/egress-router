@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/containernetworking/cni/pkg/skel"
@@ -12,9 +13,18 @@ import (
 	types020 "github.com/containernetworking/cni/pkg/types/020"
 	"github.com/containernetworking/cni/pkg/types/current"
 	"github.com/containernetworking/cni/pkg/version"
+	"github.com/containernetworking/plugins/pkg/ip"
+	"github.com/containernetworking/plugins/pkg/ns"
+	bv "github.com/containernetworking/plugins/pkg/utils/buildversion"
+	"github.com/containernetworking/plugins/pkg/utils/sysctl"
+	"github.com/vishvananda/netlink"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+)
+
+const (
+	IPv4InterfaceArpProxySysctlTemplate = "net.ipv4.conf.%s.proxy_arp"
 )
 
 type ClusterConf struct {
@@ -110,7 +120,7 @@ func fillNetConfDefaults(conf *NetConf, cluster *ClusterConf) error {
 	switch conf.InterfaceType {
 	case "macvlan":
 		for key, _ := range conf.InterfaceArgs {
-			if key == "master" || key == "mode" {
+			if key == "master" || key == "mode" || key == "mtu" {
 				continue
 			} else {
 				return fmt.Errorf("unrecognized interfaceArgs value %q for interfaceType %q", key, conf.InterfaceType)
@@ -266,8 +276,103 @@ func loadIPConfig(ipc *IPConfig, podNamespace string) (*IP, map[string]IP, error
 	}
 }
 
+func getMTUByName(ifName string) (int, error) {
+	link, err := netlink.LinkByName(ifName)
+	if err != nil {
+		return 0, err
+	}
+	return link.Attrs().MTU, nil
+}
+
+func modeFromString(s string) (netlink.MacvlanMode, error) {
+	switch s {
+	case "", "bridge":
+		return netlink.MACVLAN_MODE_BRIDGE, nil
+	case "private":
+		return netlink.MACVLAN_MODE_PRIVATE, nil
+	case "vepa":
+		return netlink.MACVLAN_MODE_VEPA, nil
+	case "passthru":
+		return netlink.MACVLAN_MODE_PASSTHRU, nil
+	default:
+		return 0, fmt.Errorf("unknown macvlan mode: %q", s)
+	}
+}
+
+func createMacvlan(conf *NetConf, ifName string, netns ns.NetNS) (*current.Interface, error) {
+	macvlan := &current.Interface{}
+
+	mode, err := modeFromString(conf.InterfaceArgs["mode"])
+	if err != nil {
+		return nil, err
+	}
+
+	m, err := netlink.LinkByName(conf.InterfaceArgs["master"])
+	if err != nil {
+		return nil, fmt.Errorf("failed to lookup master %q: %v", conf.InterfaceArgs["master"], err)
+	}
+
+	mtu, err := strconv.Atoi(conf.InterfaceArgs["mtu"])
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert MTU %q to integer: %v")
+	}
+
+	// due to kernel bug we have to create with tmpName or it might
+	// collide with the name on the host and error out
+	tmpName, err := ip.RandomVethName()
+	if err != nil {
+		return nil, err
+	}
+
+	mv := &netlink.Macvlan{
+		LinkAttrs: netlink.LinkAttrs{
+			MTU:         mtu,
+			Name:        tmpName,
+			ParentIndex: m.Attrs().Index,
+			Namespace:   netlink.NsFd(int(netns.Fd())),
+		},
+		Mode: mode,
+	}
+
+	if err := netlink.LinkAdd(mv); err != nil {
+		return nil, fmt.Errorf("failed to create macvlan: %v", err)
+	}
+
+	err = netns.Do(func(_ ns.NetNS) error {
+		// TODO: duplicate following lines for ipv6 support, when it will be added in other places
+		ipv4SysctlValueName := fmt.Sprintf(IPv4InterfaceArpProxySysctlTemplate, tmpName)
+		if _, err := sysctl.Sysctl(ipv4SysctlValueName, "1"); err != nil {
+			// remove the newly added link and ignore errors, because we already are in a failed state
+			_ = netlink.LinkDel(mv)
+			return fmt.Errorf("failed to set proxy_arp on newly added interface %q: %v", tmpName, err)
+		}
+
+		err := ip.RenameLink(tmpName, ifName)
+		if err != nil {
+			_ = netlink.LinkDel(mv)
+			return fmt.Errorf("failed to rename macvlan to %q: %v", ifName, err)
+		}
+		macvlan.Name = ifName
+
+		// Re-fetch macvlan to get all properties/attributes
+		contMacvlan, err := netlink.LinkByName(ifName)
+		if err != nil {
+			return fmt.Errorf("failed to refetch macvlan %q: %v", ifName, err)
+		}
+		macvlan.Mac = contMacvlan.Attrs().HardwareAddr.String()
+		macvlan.Sandbox = netns.Path()
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return macvlan, nil
+}
+
 func main() {
-	skel.PluginMain(cmdAdd, cmdCheck, cmdDel, version.All, "FIXME about/version string")
+	skel.PluginMain(cmdAdd, cmdCheck, cmdDel, version.All, bv.BuildString("egress-router"))
 }
 
 func cmdCheck(args *skel.CmdArgs) error {
