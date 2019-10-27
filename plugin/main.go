@@ -144,7 +144,13 @@ func fillNetConfDefaults(conf *NetConf, cluster *ClusterConf) error {
 				return fmt.Errorf("unable to get default route interface name: %v", err)
 			}
 			conf.InterfaceArgs["master"] = defaultRouteInterface
-
+		}
+		if conf.InterfaceArgs["mtu"] == "" {
+			mtu, err := getMTUByName(conf.InterfaceArgs["master"])
+			if err != nil {
+				return fmt.Errorf("unable to get MTU on master interface: %v", err)
+			}
+			conf.InterfaceArgs["mtu"] = strconv.Itoa(mtu)
 		}
 	}
 
