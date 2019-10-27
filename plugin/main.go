@@ -253,7 +253,7 @@ func loadIPConfig(ipc *IPConfig, podNamespace string) (*IP, map[string]IP, error
 
 	cm, err := clientset.CoreV1().ConfigMaps(ipc.Namespace).Get(ipc.Name, metav1.GetOptions{})
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get ConfigMap on namespace %s with name %s", ipc.Namespace, ipc.Name)
+		return nil, nil, fmt.Errorf("failed to get ConfigMap on namespace %s with name %s: %v", ipc.Namespace, ipc.Name)
 	}
 
 	if cm.Data["ip"] != "" {
