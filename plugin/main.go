@@ -145,6 +145,9 @@ func fillNetConfDefaults(conf *NetConf, cluster *ClusterConf) error {
 			}
 			conf.InterfaceArgs["master"] = defaultRouteInterface
 		}
+		if conf.InterfaceArgs["mode"] == "" {
+			conf.InterfaceArgs["mode"] = "bridge"
+		}
 		if conf.InterfaceArgs["mtu"] == "" {
 			mtu, err := getMTUByName(conf.InterfaceArgs["master"])
 			if err != nil {
@@ -323,7 +326,7 @@ func getMTUByName(ifName string) (int, error) {
 
 func modeFromString(s string) (netlink.MacvlanMode, error) {
 	switch s {
-	case "", "bridge":
+	case "bridge":
 		return netlink.MACVLAN_MODE_BRIDGE, nil
 	case "private":
 		return netlink.MACVLAN_MODE_PRIVATE, nil
