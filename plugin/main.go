@@ -146,13 +146,6 @@ func fillNetConfDefaults(conf *NetConf, cluster *ClusterConf) error {
 			conf.InterfaceArgs["master"] = defaultRouteInterface
 
 		}
-		for key, _ := range conf.InterfaceArgs {
-			if key == "master" || key == "mode" || key == "mtu" {
-				continue
-			} else {
-				return fmt.Errorf("unrecognized interfaceArgs value %q for interfaceType %q", key, conf.InterfaceType)
-			}
-		}
 	}
 
 	return nil
