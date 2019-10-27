@@ -1,5 +1,5 @@
 hash: 70250b914ee9b50315e40d7a7068794432252d2796e2e7161d6b0392964c30b3
-updated: 2019-10-25T12:43:34.562250384+02:00
+updated: 2019-10-27T11:05:59.762404982+01:00
 imports:
 - name: github.com/containernetworking/cni
   version: 4cfb7b568922a3c79a23e438dc52fe537fc9687e
@@ -23,7 +23,7 @@ imports:
   - plugins/ipam/host-local/backend
   - plugins/ipam/host-local/backend/allocator
 - name: github.com/coreos/go-iptables
-  version: 259c8e6a4275d497442c721fa52204d7a58bde8b
+  version: af017ce15ce0adc4beab89d270abfeeb4d262cf1
   subpackages:
   - iptables
 - name: github.com/davecgh/go-spew

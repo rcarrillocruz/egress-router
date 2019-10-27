@@ -40,6 +40,20 @@ const (
 	IPv4InterfaceArpProxySysctlTemplate = "net.ipv4.conf.%s.proxy_arp"
 )
 
+type NetConf struct {
+	types.NetConf
+	Master string `json:"master"`
+	Mode   string `json:"mode"`
+	MTU    int    `json:"mtu"`
+}
+
+func init() {
+	// this ensures that main runs only on main thread (thread group leader).
+	// since namespace ops (unshare, setns) are done for a single thread, we
+	// must ensure that the goroutine does not jump from OS thread to thread
+	runtime.LockOSThread()
+}
+
 func getDefaultRouteInterfaceName() (string, error) {
 	routeToDstIP, err := netlink.RouteList(nil, netlink.FAMILY_ALL)
 	if err != nil {
@@ -57,6 +71,39 @@ func getDefaultRouteInterfaceName() (string, error) {
 	}
 
 	return "", fmt.Errorf("no default route interface found")
+}
+
+func loadConf(bytes []byte) (*NetConf, string, error) {
+	n := &NetConf{}
+	if err := json.Unmarshal(bytes, n); err != nil {
+		return nil, "", fmt.Errorf("failed to load netconf: %v", err)
+	}
+	if n.Master == "" {
+		defaultRouteInterface, err := getDefaultRouteInterfaceName()
+		if err != nil {
+			return nil, "", err
+		}
+		n.Master = defaultRouteInterface
+	}
+
+	// check existing and MTU of master interface
+	masterMTU, err := getMTUByName(n.Master)
+	if err != nil {
+		return nil, "", err
+	}
+	if n.MTU < 0 || n.MTU > masterMTU {
+		return nil, "", fmt.Errorf("invalid MTU %d, must be [0, master MTU(%d)]", n.MTU, masterMTU)
+	}
+
+	return n, n.CNIVersion, nil
+}
+
+func getMTUByName(ifName string) (int, error) {
+	link, err := netlink.LinkByName(ifName)
+	if err != nil {
+		return 0, err
+	}
+	return link.Attrs().MTU, nil
 }
 
 func modeFromString(s string) (netlink.MacvlanMode, error) {
@@ -162,6 +209,8 @@ func cmdAdd(args *skel.CmdArgs) error {
 		return err
 	}
 
+	isLayer3 := n.IPAM.Type != ""
+
 	netns, err := ns.GetNS(args.Netns)
 	if err != nil {
 		return fmt.Errorf("failed to open netns %q: %v", netns, err)
@@ -182,8 +231,10 @@ func cmdAdd(args *skel.CmdArgs) error {
 		}
 	}()
 
+	// Assume L2 interface only
 	result := &current.Result{CNIVersion: cniVersion, Interfaces: []*current.Interface{macvlanInterface}}
 
+	if isLayer3 {
 		// run the IPAM plugin and get back the config to apply
 		r, err := ipam.ExecAdd(n.IPAM.Type, args.StdinData)
 		if err != nil {
@@ -235,6 +286,26 @@ func cmdAdd(args *skel.CmdArgs) error {
 		if err != nil {
 			return err
 		}
+	} else {
+		// For L2 just change interface status to up
+		err = netns.Do(func(_ ns.NetNS) error {
+			macvlanInterfaceLink, err := netlink.LinkByName(args.IfName)
+			if err != nil {
+				return fmt.Errorf("failed to find interface name %q: %v", macvlanInterface.Name, err)
+			}
+
+			if err := netlink.LinkSetUp(macvlanInterfaceLink); err != nil {
+				return fmt.Errorf("failed to set %q UP: %v", args.IfName, err)
+			}
+
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	result.DNS = n.DNS
 
 	return types.PrintResult(result, cniVersion)
 }
