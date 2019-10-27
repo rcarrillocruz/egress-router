@@ -108,6 +108,25 @@ func loadNetConf(cluster *ClusterConf, bytes []byte) (*NetConf, error) {
 	return conf, nil
 }
 
+func getDefaultRouteInterfaceName() (string, error) {
+	routeToDstIP, err := netlink.RouteList(nil, netlink.FAMILY_ALL)
+	if err != nil {
+		return "", err
+	}
+
+	for _, v := range routeToDstIP {
+		if v.Dst == nil {
+			l, err := netlink.LinkByIndex(v.LinkIndex)
+			if err != nil {
+				return "", err
+			}
+			return l.Attrs().Name, nil
+		}
+	}
+
+	return "", fmt.Errorf("no default route interface found")
+}
+
 func fillNetConfDefaults(conf *NetConf, cluster *ClusterConf) error {
 	if conf.InterfaceType == "" {
 		if cluster.CloudProvider == "" {
@@ -119,6 +138,14 @@ func fillNetConfDefaults(conf *NetConf, cluster *ClusterConf) error {
 
 	switch conf.InterfaceType {
 	case "macvlan":
+		if conf.InterfaceArgs["master"] == "" {
+			defaultRouteInterface, err := getDefaultRouteInterfaceName()
+			if err != nil {
+				return fmt.Errorf("unable to get default route interface name: %v", err)
+			}
+			conf.InterfaceArgs["master"] = defaultRouteInterface
+
+		}
 		for key, _ := range conf.InterfaceArgs {
 			if key == "master" || key == "mode" || key == "mtu" {
 				continue
@@ -126,16 +153,6 @@ func fillNetConfDefaults(conf *NetConf, cluster *ClusterConf) error {
 				return fmt.Errorf("unrecognized interfaceArgs value %q for interfaceType %q", key, conf.InterfaceType)
 			}
 		}
-	case "ipvlan":
-		for key, _ := range conf.InterfaceArgs {
-			if key == "master" {
-				continue
-			} else {
-				return fmt.Errorf("unrecognized interfaceArgs value %q for interfaceType %q", key, conf.InterfaceType)
-			}
-		}
-	default:
-		return fmt.Errorf("unrecognized interfaceType %q", conf.InterfaceType)
 	}
 
 	return nil
@@ -185,6 +202,27 @@ func validateNetConf(conf *NetConf) error {
 	}
 	if err := validateIP(conf.IP); err != nil {
 		return err
+	}
+
+	switch conf.InterfaceType {
+	case "macvlan":
+		for key, _ := range conf.InterfaceArgs {
+			if key == "master" || key == "mode" || key == "mtu" {
+				continue
+			} else {
+				return fmt.Errorf("unrecognized interfaceArgs value %q for interfaceType %q", key, conf.InterfaceType)
+			}
+		}
+	case "ipvlan":
+		for key, _ := range conf.InterfaceArgs {
+			if key == "master" {
+				continue
+			} else {
+				return fmt.Errorf("unrecognized interfaceArgs value %q for interfaceType %q", key, conf.InterfaceType)
+			}
+		}
+	default:
+		return fmt.Errorf("unrecognized interfaceType %q", conf.InterfaceType)
 	}
 
 	return nil
