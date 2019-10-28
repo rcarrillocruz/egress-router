@@ -795,5 +795,6 @@ func cmdAdd(args *skel.CmdArgs) error {
 
 func cmdDel(args *skel.CmdArgs) error {
 	// Nothing required because of no resource allocation in static plugin.
+	macvlanCmdDel(args)
 	return nil
 }
