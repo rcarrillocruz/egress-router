@@ -17,6 +17,7 @@ import (
 	"github.com/containernetworking/plugins/pkg/ns"
 	bv "github.com/containernetworking/plugins/pkg/utils/buildversion"
 	"github.com/containernetworking/plugins/pkg/utils/sysctl"
+	"github.com/j-keck/arping"
 	"github.com/vishvananda/netlink"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -25,6 +26,7 @@ import (
 
 const (
 	IPv4InterfaceArpProxySysctlTemplate = "net.ipv4.conf.%s.proxy_arp"
+	DisableIPv6SysctlTemplate           = "net.ipv6.conf.%s.disable_ipv6"
 )
 
 type ClusterConf struct {
@@ -106,6 +108,96 @@ func loadNetConf(cluster *ClusterConf, bytes []byte) (*NetConf, error) {
 	}
 
 	return conf, nil
+}
+
+// configureIface takes the result of IPAM plugin and
+// applies to the ifName interface
+func configureIface(ifName string, res *current.Result) error {
+	if len(res.Interfaces) == 0 {
+		return fmt.Errorf("no interfaces to configure")
+	}
+
+	link, err := netlink.LinkByName(ifName)
+	if err != nil {
+		return fmt.Errorf("failed to lookup %q: %v", ifName, err)
+	}
+
+	if err := netlink.LinkSetUp(link); err != nil {
+		return fmt.Errorf("failed to set %q UP: %v", ifName, err)
+	}
+
+	var v4gw, v6gw net.IP
+	var has_enabled_ipv6 bool = false
+	for _, ipc := range res.IPs {
+		if ipc.Interface == nil {
+			continue
+		}
+		intIdx := *ipc.Interface
+		if intIdx < 0 || intIdx >= len(res.Interfaces) || res.Interfaces[intIdx].Name != ifName {
+			// IP address is for a different interface
+			return fmt.Errorf("failed to add IP addr %v to %q: invalid interface index", ipc, ifName)
+		}
+
+		// Make sure sysctl "disable_ipv6" is 0 if we are about to add
+		// an IPv6 address to the interface
+		if !has_enabled_ipv6 && ipc.Version == "6" {
+			// Enabled IPv6 for loopback "lo" and the interface
+			// being configured
+			for _, iface := range [2]string{"lo", ifName} {
+				ipv6SysctlValueName := fmt.Sprintf(DisableIPv6SysctlTemplate, iface)
+
+				// Read current sysctl value
+				value, err := sysctl.Sysctl(ipv6SysctlValueName)
+				if err != nil || value == "0" {
+					// FIXME: log warning if unable to read sysctl value
+					continue
+				}
+
+				// Write sysctl to enable IPv6
+				_, err = sysctl.Sysctl(ipv6SysctlValueName, "0")
+				if err != nil {
+					return fmt.Errorf("failed to enable IPv6 for interface %q (%s=%s): %v", iface, ipv6SysctlValueName, value, err)
+				}
+			}
+			has_enabled_ipv6 = true
+		}
+
+		addr := &netlink.Addr{IPNet: &ipc.Address, Label: ""}
+		if err = netlink.AddrAdd(link, addr); err != nil {
+			return fmt.Errorf("failed to add IP addr %v to %q: %v", ipc, ifName, err)
+		}
+
+		gwIsV4 := ipc.Gateway.To4() != nil
+		if gwIsV4 && v4gw == nil {
+			v4gw = ipc.Gateway
+		} else if !gwIsV4 && v6gw == nil {
+			v6gw = ipc.Gateway
+		}
+	}
+
+	if v6gw != nil {
+		ip.SettleAddresses(ifName, 10)
+	}
+
+	for _, r := range res.Routes {
+		routeIsV4 := r.Dst.IP.To4() != nil
+		gw := r.GW
+		if gw == nil {
+			if routeIsV4 && v4gw != nil {
+				gw = v4gw
+			} else if !routeIsV4 && v6gw != nil {
+				gw = v6gw
+			}
+		}
+		if err = ip.AddRoute(&r.Dst, gw, link); err != nil {
+			// we skip over duplicate routes as we assume the first one wins
+			if !os.IsExist(err) {
+				return fmt.Errorf("failed to add route '%v via %v dev %v': %v", r.Dst, gw, ifName, err)
+			}
+		}
+	}
+
+	return nil
 }
 
 func getDefaultRouteInterfaceName() (string, error) {
@@ -314,6 +406,100 @@ func loadIPConfig(ipc *IPConfig, podNamespace string) (*IP, map[string]IP, error
 	} else {
 		return nil, nil, fmt.Errorf("ConfigMap %s/%s contains neither 'ip' nor 'podIP'", ipc.Namespace, ipc.Name)
 	}
+}
+
+func macvlanCmdAdd(args *skel.CmdArgs, res *current.Result) error {
+	n, err := loadNetConf(&ClusterConf{}, args.StdinData)
+	if err != nil {
+		return err
+	}
+
+	isLayer3 := n.IPAM.Type != ""
+
+	netns, err := ns.GetNS(args.Netns)
+	if err != nil {
+		return fmt.Errorf("failed to open netns %q: %v", netns, err)
+	}
+	defer netns.Close()
+
+	macvlanInterface, err := createMacvlan(n, args.IfName, netns)
+	if err != nil {
+		return err
+	}
+
+	// Delete link if err to avoid link leak in this ns
+	defer func() {
+		if err != nil {
+			netns.Do(func(_ ns.NetNS) error {
+				return ip.DelLinkByName(args.IfName)
+			})
+		}
+	}()
+
+	// Assume L2 interface only
+	result := &current.Result{CNIVersion: n.CNIVersion, Interfaces: []*current.Interface{macvlanInterface}}
+
+	if isLayer3 {
+		// Convert whatever the IPAM result was into the current Result type
+		ipamResult, err := current.NewResultFromResult(res)
+		if err != nil {
+			return err
+		}
+
+		if len(ipamResult.IPs) == 0 {
+			return fmt.Errorf("IPAM had no IPs")
+		}
+
+		result.IPs = ipamResult.IPs
+		result.Routes = ipamResult.Routes
+
+		for _, ipc := range result.IPs {
+			// All addresses apply to the container macvlan interface
+			ipc.Interface = current.Int(0)
+		}
+
+		err = netns.Do(func(_ ns.NetNS) error {
+			if err := configureIface(args.IfName, result); err != nil {
+				return err
+			}
+
+			contVeth, err := net.InterfaceByName(args.IfName)
+			if err != nil {
+				return fmt.Errorf("failed to look up %q: %v", args.IfName, err)
+			}
+
+			for _, ipc := range result.IPs {
+				if ipc.Version == "4" {
+					_ = arping.GratuitousArpOverIface(ipc.Address.IP, *contVeth)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	} else {
+		// For L2 just change interface status to up
+		err = netns.Do(func(_ ns.NetNS) error {
+			macvlanInterfaceLink, err := netlink.LinkByName(args.IfName)
+			if err != nil {
+				return fmt.Errorf("failed to find interface name %q: %v", macvlanInterface.Name, err)
+			}
+
+			if err := netlink.LinkSetUp(macvlanInterfaceLink); err != nil {
+				return fmt.Errorf("failed to set %q UP: %v", args.IfName, err)
+			}
+
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	result.DNS = n.DNS
+
+	return nil
 }
 
 func getMTUByName(ifName string) (int, error) {
@@ -584,6 +770,7 @@ func cmdAdd(args *skel.CmdArgs) error {
 			Gateway: v.Gateway})
 	}
 
+	macvlanCmdAdd(args, result)
 	return types.PrintResult(result, confVersion)
 }
 
