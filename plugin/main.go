@@ -621,7 +621,7 @@ func main() {
 }
 
 func cmdCheck(args *skel.CmdArgs) error {
-	ipamConf, _, err := LoadIPAMConfig(args.StdinData, args.Args)
+	ipamConf, _, err := loadIPAMConfig(args.StdinData, args.Args)
 	if err != nil {
 		return err
 	}
@@ -676,10 +676,10 @@ func canonicalizeIP(ip *net.IP) error {
 	return fmt.Errorf("IP %s not v4 nor v6", *ip)
 }
 
-// LoadIPAMConfig creates IPAMConfig using json encoded configuration provided
+// loadIPAMConfig creates IPAMConfig using json encoded configuration provided
 // as `bytes`. At the moment values provided in envArgs are ignored so there
 // is no possibility to overload the json configuration using envArgs
-func LoadIPAMConfig(bytes []byte, envArgs string) (*IPAMConfig, string, error) {
+func loadIPAMConfig(bytes []byte, envArgs string) (*IPAMConfig, string, error) {
 	n := Net{}
 	if err := json.Unmarshal(bytes, &n); err != nil {
 		return nil, "", err
@@ -774,7 +774,7 @@ func LoadIPAMConfig(bytes []byte, envArgs string) (*IPAMConfig, string, error) {
 }
 
 func cmdAdd(args *skel.CmdArgs) error {
-	ipamConf, confVersion, err := LoadIPAMConfig(args.StdinData, args.Args)
+	ipamConf, confVersion, err := loadIPAMConfig(args.StdinData, args.Args)
 	if err != nil {
 		return err
 	}
