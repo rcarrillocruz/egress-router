@@ -680,38 +680,38 @@ func canonicalizeIP(ip *net.IP) error {
 // as `bytes`. At the moment values provided in envArgs are ignored so there
 // is no possibility to overload the json configuration using envArgs
 func loadIPAMConfig(bytes []byte, envArgs string) (*IPAMConfig, string, error) {
-	n := Net{}
+	n := NetConf{}
 	if err := json.Unmarshal(bytes, &n); err != nil {
 		return nil, "", err
 	}
 
-	if n.IPAM == nil {
-		return nil, "", fmt.Errorf("IPAM config missing 'ipam' key")
-	}
-
+	ipamConf := &IPAMConfig{}
+	ipamConf.Addresses = []Address{}
 	// Validate all ranges
 	numV4 := 0
 	numV6 := 0
 
-	for i := range n.IPAM.Addresses {
-		ip, addr, err := net.ParseCIDR(n.IPAM.Addresses[i].AddressStr)
+	// Assume NetConf just uses IP for now
+	for _, a := range n.IP.Addresses {
+		ip, addr, err := net.ParseCIDR(a)
 		if err != nil {
-			return nil, "", fmt.Errorf("invalid CIDR %s: %s", n.IPAM.Addresses[i].AddressStr, err)
+			return nil, "", fmt.Errorf("invalid CIDR %s: %s", a, err)
 		}
-		n.IPAM.Addresses[i].Address = *addr
-		n.IPAM.Addresses[i].Address.IP = ip
-
-		if err := canonicalizeIP(&n.IPAM.Addresses[i].Address.IP); err != nil {
-			return nil, "", fmt.Errorf("invalid address %d: %s", i, err)
+		if err := canonicalizeIP(&ip); err != nil {
+			return nil, "", fmt.Errorf("invalid address %d: %s", a, err)
 		}
+		newAddr := Address{AddressStr: a}
+		newAddr.Address = *addr
+		newAddr.Address.IP = ip
 
-		if n.IPAM.Addresses[i].Address.IP.To4() != nil {
-			n.IPAM.Addresses[i].Version = "4"
+		if newAddr.Address.IP.To4() != nil {
+			newAddr.Version = "4"
 			numV4++
 		} else {
-			n.IPAM.Addresses[i].Version = "6"
+			newAddr.Version = "6"
 			numV6++
 		}
+		ipamConf.Addresses = append(ipamConf.Addresses, Address{AddressStr: a})
 	}
 
 	if envArgs != "" {
@@ -738,7 +738,7 @@ func loadIPAMConfig(bytes []byte, envArgs string) (*IPAMConfig, string, error) {
 					addr.Version = "6"
 					numV6++
 				}
-				n.IPAM.Addresses = append(n.IPAM.Addresses, addr)
+				ipamConf.Addresses = append(ipamConf.Addresses, addr)
 			}
 		}
 
@@ -749,9 +749,9 @@ func loadIPAMConfig(bytes []byte, envArgs string) (*IPAMConfig, string, error) {
 					return nil, "", fmt.Errorf("invalid gateway address: %s", item)
 				}
 
-				for i := range n.IPAM.Addresses {
-					if n.IPAM.Addresses[i].Address.Contains(gwip) {
-						n.IPAM.Addresses[i].Gateway = gwip
+				for i := range ipamConf.Addresses {
+					if ipamConf.Addresses[i].Address.Contains(gwip) {
+						ipamConf.Addresses[i].Gateway = gwip
 					}
 				}
 			}
@@ -768,9 +768,9 @@ func loadIPAMConfig(bytes []byte, envArgs string) (*IPAMConfig, string, error) {
 	}
 
 	// Copy net name into IPAM so not to drag Net struct around
-	n.IPAM.Name = n.Name
+	ipamConf.Name = n.Name
 
-	return n.IPAM, n.CNIVersion, nil
+	return ipamConf, n.CNIVersion, nil
 }
 
 func cmdAdd(args *skel.CmdArgs) error {
