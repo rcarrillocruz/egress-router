@@ -295,13 +295,13 @@ func macvlanCmdAdd(args *skel.CmdArgs) error {
 		}
 	}()
 
-	_, ipnet, err := net.ParseCIDR(n.IP.Addresses[0])
+	ip, ipnet, err := net.ParseCIDR(n.IP.Addresses[0])
 	gw := net.ParseIP(n.IP.Gateway)
 	// Assume L2 interface only
 	result := &current.Result{CNIVersion: n.CNIVersion, Interfaces: []*current.Interface{macvlanInterface}}
 	result.IPs = append(result.IPs, &current.IPConfig{
 		Version: "4",
-		Address: *ipnet,
+		Address: net.IPNet{IP: ip, Mask: ipnet.Mask},
 		Gateway: gw,
 	})
 
