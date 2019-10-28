@@ -6,11 +6,9 @@ import (
 	"net"
 	"os"
 	"strconv"
-	"strings"
 
 	"github.com/containernetworking/cni/pkg/skel"
 	"github.com/containernetworking/cni/pkg/types"
-	types020 "github.com/containernetworking/cni/pkg/types/020"
 	"github.com/containernetworking/cni/pkg/types/current"
 	"github.com/containernetworking/cni/pkg/version"
 	"github.com/containernetworking/plugins/pkg/ip"
@@ -56,54 +54,12 @@ type IPConfig struct {
 	Overrides *IP    `json:"overrides"`
 }
 
-type Net struct {
-	Name       string      `json:"name"`
-	CNIVersion string      `json:"cniVersion"`
-	IPAM       *IPAMConfig `json:"ipam"`
-
-	RuntimeConfig struct {
-		IPs []string `json:"ips,omitempty"`
-	} `json:"runtimeConfig,omitempty"`
-	Args *struct {
-		A *IPAMArgs `json:"cni"`
-	} `json:"args"`
-}
-
-type Address struct {
-	AddressStr string `json:"address"`
-	Gateway    net.IP `json:"gateway,omitempty"`
-	Address    net.IPNet
-	Version    string
-}
-
-type IPAMArgs struct {
-	IPs []string `json:"ips"`
-}
-
-type IPAMEnvArgs struct {
-	types.CommonArgs
-
-	IP      types.UnmarshallableString `json:"ip,omitempty"`
-	GATEWAY types.UnmarshallableString `json:"gateway,omitempty"`
-}
-
-type IPAMConfig struct {
-	Name      string
-	Type      string         `json:"type"`
-	Routes    []*types.Route `json:"routes"`
-	Addresses []Address      `json:"addresses,omitempty"`
-	DNS       types.DNS      `json:"dns"`
-}
-
 func loadNetConf(cluster *ClusterConf, bytes []byte) (*NetConf, error) {
 	conf := &NetConf{}
 	if err := json.Unmarshal(bytes, conf); err != nil {
 		return nil, fmt.Errorf("failed to load netconf: %v", err)
 	}
 	if err := fillNetConfDefaults(conf, cluster); err != nil {
-		return nil, err
-	}
-	if err := validateNetConf(conf); err != nil {
 		return nil, err
 	}
 
@@ -235,6 +191,9 @@ func fillNetConfDefaults(conf *NetConf, cluster *ClusterConf) error {
 			if err != nil {
 				return fmt.Errorf("unable to get default route interface name: %v", err)
 			}
+			if conf.InterfaceArgs == nil {
+				conf.InterfaceArgs = make(map[string]string)
+			}
 			conf.InterfaceArgs["master"] = defaultRouteInterface
 		}
 		if conf.InterfaceArgs["mode"] == "" {
@@ -246,123 +205,6 @@ func fillNetConfDefaults(conf *NetConf, cluster *ClusterConf) error {
 				return fmt.Errorf("unable to get MTU on master interface: %v", err)
 			}
 			conf.InterfaceArgs["mtu"] = strconv.Itoa(mtu)
-		}
-	}
-
-	return nil
-}
-
-func validateNetConf(conf *NetConf) error {
-	cniArgs := os.Getenv("CNI_ARGS")
-	if cniArgs == "" {
-		return fmt.Errorf("missing or unset CNI_ARGS")
-	}
-	mapArgs := make(map[string]string)
-	for _, arg := range strings.Split(cniArgs, ";") {
-		parts := strings.Split(arg, "=")
-		if len(parts) != 2 {
-			return fmt.Errorf("invalid CNI_ARG '%s'", arg)
-		}
-		mapArgs[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
-	}
-	if conf.IP == nil && conf.PodIP == nil && conf.IPConfig == nil {
-		return fmt.Errorf("exactly 1 of 'ip', 'podIP', or 'ipConfig' must be set")
-	}
-	if conf.IPConfig != nil {
-		if conf.IP != nil || conf.PodIP != nil {
-			return fmt.Errorf("exactly 1 of 'ip', 'podIP', or 'ipConfig' must be set")
-		}
-		var err error
-		conf.IP, conf.PodIP, err = loadIPConfig(conf.IPConfig, mapArgs["K8S_POD_NAMESPACE"])
-		if err != nil {
-			return err
-		}
-	}
-	if conf.PodIP != nil {
-		if conf.IP != nil {
-			return fmt.Errorf("exactly 1 of 'ip', 'podIP', or 'ipConfig' must be set")
-		}
-		for podName, ipc := range conf.PodIP {
-			if podName == mapArgs["K8S_POD_NAME"] {
-				if conf.IP != nil {
-					return fmt.Errorf("multiple configurations in 'podIP' matching pod name %q", mapArgs["K8S_POD_NAME"])
-				}
-				conf.IP = &ipc
-			}
-		}
-		if conf.IP == nil {
-			return fmt.Errorf("no configuration in 'podIP' matching pod name %q", mapArgs["K8S_POD_NAME"])
-		}
-	}
-	if err := validateIP(conf.IP); err != nil {
-		return err
-	}
-
-	switch conf.InterfaceType {
-	case "macvlan":
-		for key, _ := range conf.InterfaceArgs {
-			if key == "master" || key == "mode" || key == "mtu" {
-				continue
-			} else {
-				return fmt.Errorf("unrecognized interfaceArgs value %q for interfaceType %q", key, conf.InterfaceType)
-			}
-		}
-	case "ipvlan":
-		for key, _ := range conf.InterfaceArgs {
-			if key == "master" {
-				continue
-			} else {
-				return fmt.Errorf("unrecognized interfaceArgs value %q for interfaceType %q", key, conf.InterfaceType)
-			}
-		}
-	default:
-		return fmt.Errorf("unrecognized interfaceType %q", conf.InterfaceType)
-	}
-
-	return nil
-}
-
-func validateIP(ip *IP) error {
-	if len(ip.Addresses) == 0 {
-		return fmt.Errorf("must specify at least one IP address")
-	}
-	var got4, got6 bool
-	for _, addr := range ip.Addresses {
-		var ipaddr *net.IP
-		ip, _, err := net.ParseCIDR(addr)
-		if err == nil {
-			ipaddr = &ip
-		} else {
-			tmp := net.ParseIP(addr)
-			ipaddr = &tmp
-		}
-		if ipaddr == nil {
-			return fmt.Errorf("%q is not a valid IP address", addr)
-		}
-		if ipaddr.To4() != nil {
-			got4 = true
-		} else {
-			got6 = true
-		}
-	}
-	if ip.Gateway != "" {
-		gw := net.ParseIP(ip.Gateway)
-		if gw == nil {
-			return fmt.Errorf("%q is not a valid IP address", ip.Gateway)
-		}
-		if gw.To4() != nil {
-			if !got4 {
-				return fmt.Errorf("gateway %q is IPv4 but no IPv4 addresess configured", ip.Gateway)
-			}
-		} else {
-			if !got6 {
-				return fmt.Errorf("gateway %q is IPv6 but no IPv6 addresess configured", ip.Gateway)
-			}
-		}
-	}
-	for _, cidr := range ip.Destinations {
-		if _, _, err := net.ParseCIDR(cidr); err != nil {
-			return fmt.Errorf("%q is not a valid CIDR block", cidr)
 		}
 	}
 
@@ -427,13 +269,11 @@ func macvlanCmdDel(args *skel.CmdArgs) error {
 	return err
 }
 
-func macvlanCmdAdd(args *skel.CmdArgs, res *current.Result) error {
+func macvlanCmdAdd(args *skel.CmdArgs) error {
 	n, err := loadNetConf(&ClusterConf{}, args.StdinData)
 	if err != nil {
 		return err
 	}
-
-	isLayer3 := n.IPAM.Type != ""
 
 	netns, err := ns.GetNS(args.Netns)
 	if err != nil {
@@ -455,65 +295,40 @@ func macvlanCmdAdd(args *skel.CmdArgs, res *current.Result) error {
 		}
 	}()
 
+	_, ipnet, err := net.ParseCIDR(n.IP.Addresses[0])
+	gw := net.ParseIP(n.IP.Gateway)
 	// Assume L2 interface only
 	result := &current.Result{CNIVersion: n.CNIVersion, Interfaces: []*current.Interface{macvlanInterface}}
+	result.IPs = append(result.IPs, &current.IPConfig{
+		Version: "4",
+		Address: *ipnet,
+		Gateway: gw,
+	})
 
-	if isLayer3 {
-		// Convert whatever the IPAM result was into the current Result type
-		ipamResult, err := current.NewResultFromResult(res)
-		if err != nil {
+	for _, ipc := range result.IPs {
+		// All addresses apply to the container macvlan interface
+		ipc.Interface = current.Int(0)
+	}
+
+	err = netns.Do(func(_ ns.NetNS) error {
+		if err := configureIface(args.IfName, result); err != nil {
 			return err
 		}
 
-		if len(ipamResult.IPs) == 0 {
-			return fmt.Errorf("IPAM had no IPs")
+		contVeth, err := net.InterfaceByName(args.IfName)
+		if err != nil {
+			return fmt.Errorf("failed to look up %q: %v", args.IfName, err)
 		}
-
-		result.IPs = ipamResult.IPs
-		result.Routes = ipamResult.Routes
 
 		for _, ipc := range result.IPs {
-			// All addresses apply to the container macvlan interface
-			ipc.Interface = current.Int(0)
+			if ipc.Version == "4" {
+				_ = arping.GratuitousArpOverIface(ipc.Address.IP, *contVeth)
+			}
 		}
-
-		err = netns.Do(func(_ ns.NetNS) error {
-			if err := configureIface(args.IfName, result); err != nil {
-				return err
-			}
-
-			contVeth, err := net.InterfaceByName(args.IfName)
-			if err != nil {
-				return fmt.Errorf("failed to look up %q: %v", args.IfName, err)
-			}
-
-			for _, ipc := range result.IPs {
-				if ipc.Version == "4" {
-					_ = arping.GratuitousArpOverIface(ipc.Address.IP, *contVeth)
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			return err
-		}
-	} else {
-		// For L2 just change interface status to up
-		err = netns.Do(func(_ ns.NetNS) error {
-			macvlanInterfaceLink, err := netlink.LinkByName(args.IfName)
-			if err != nil {
-				return fmt.Errorf("failed to find interface name %q: %v", macvlanInterface.Name, err)
-			}
-
-			if err := netlink.LinkSetUp(macvlanInterfaceLink); err != nil {
-				return fmt.Errorf("failed to set %q UP: %v", args.IfName, err)
-			}
-
-			return nil
-		})
-		if err != nil {
-			return err
-		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
 	result.DNS = n.DNS
@@ -617,184 +432,21 @@ func createMacvlan(conf *NetConf, ifName string, netns ns.NetNS) (*current.Inter
 }
 
 func main() {
-	skel.PluginMain(cmdAdd, cmdCheck, cmdDel, version.All, bv.BuildString("egress-router"))
+	skel.PluginMain(cmdAdd, cmdCheck, cmdDel, version.All, bv.BuildString("openshift-egress"))
 }
 
 func cmdCheck(args *skel.CmdArgs) error {
-	ipamConf, _, err := loadIPAMConfig(args.StdinData, args.Args)
-	if err != nil {
-		return err
-	}
+	return nil
+}
 
-	// Get PrevResult from stdin... store in RawPrevResult
-	n, err := loadNetConf(&ClusterConf{}, args.StdinData)
-	if err != nil {
-		return err
-	}
-
-	// Parse previous result.
-	if n.RawPrevResult == nil {
-		return fmt.Errorf("Required prevResult missing")
-	}
-
-	if err := version.ParsePrevResult(&n.NetConf); err != nil {
-		return err
-	}
-
-	result, err := current.NewResultFromResult(n.PrevResult)
-	if err != nil {
-		return err
-	}
-
-	// Each configured IP should be found in result.IPs
-	for _, rangeset := range ipamConf.Addresses {
-		for _, ips := range result.IPs {
-			// Ensure values are what we expect
-			if rangeset.Address.IP.Equal(ips.Address.IP) {
-				if rangeset.Gateway == nil {
-					break
-				} else if rangeset.Gateway.Equal(ips.Gateway) {
-					break
-				}
-				return fmt.Errorf("static: Failed to match addr %v on interface %v", ips.Address.IP, args.IfName)
-			}
-		}
-	}
+func cmdAdd(args *skel.CmdArgs) error {
+	macvlanCmdAdd(args)
 
 	return nil
 }
 
-// canonicalizeIP makes sure a provided ip is in standard form
-func canonicalizeIP(ip *net.IP) error {
-	if ip.To4() != nil {
-		*ip = ip.To4()
-		return nil
-	} else if ip.To16() != nil {
-		*ip = ip.To16()
-		return nil
-	}
-	return fmt.Errorf("IP %s not v4 nor v6", *ip)
-}
-
-// loadIPAMConfig creates IPAMConfig using json encoded configuration provided
-// as `bytes`. At the moment values provided in envArgs are ignored so there
-// is no possibility to overload the json configuration using envArgs
-func loadIPAMConfig(bytes []byte, envArgs string) (*IPAMConfig, string, error) {
-	n := NetConf{}
-	if err := json.Unmarshal(bytes, &n); err != nil {
-		return nil, "", err
-	}
-
-	ipamConf := &IPAMConfig{}
-	ipamConf.Addresses = []Address{}
-	// Validate all ranges
-	numV4 := 0
-	numV6 := 0
-
-	// Assume NetConf just uses IP for now
-	for _, a := range n.IP.Addresses {
-		ip, addr, err := net.ParseCIDR(a)
-		if err != nil {
-			return nil, "", fmt.Errorf("invalid CIDR %s: %s", a, err)
-		}
-		if err := canonicalizeIP(&ip); err != nil {
-			return nil, "", fmt.Errorf("invalid address %d: %s", a, err)
-		}
-		newAddr := Address{AddressStr: a}
-		newAddr.Address = *addr
-		newAddr.Address.IP = ip
-
-		if newAddr.Address.IP.To4() != nil {
-			newAddr.Version = "4"
-			numV4++
-		} else {
-			newAddr.Version = "6"
-			numV6++
-		}
-		ipamConf.Addresses = append(ipamConf.Addresses, Address{AddressStr: a})
-	}
-
-	if envArgs != "" {
-		e := IPAMEnvArgs{}
-		err := types.LoadArgs(envArgs, &e)
-		if err != nil {
-			return nil, "", err
-		}
-
-		if e.IP != "" {
-			for _, item := range strings.Split(string(e.IP), ",") {
-				ipstr := strings.TrimSpace(item)
-
-				ip, subnet, err := net.ParseCIDR(ipstr)
-				if err != nil {
-					return nil, "", fmt.Errorf("invalid CIDR %s: %s", ipstr, err)
-				}
-
-				addr := Address{Address: net.IPNet{IP: ip, Mask: subnet.Mask}}
-				if addr.Address.IP.To4() != nil {
-					addr.Version = "4"
-					numV4++
-				} else {
-					addr.Version = "6"
-					numV6++
-				}
-				ipamConf.Addresses = append(ipamConf.Addresses, addr)
-			}
-		}
-
-		if e.GATEWAY != "" {
-			for _, item := range strings.Split(string(e.GATEWAY), ",") {
-				gwip := net.ParseIP(strings.TrimSpace(item))
-				if gwip == nil {
-					return nil, "", fmt.Errorf("invalid gateway address: %s", item)
-				}
-
-				for i := range ipamConf.Addresses {
-					if ipamConf.Addresses[i].Address.Contains(gwip) {
-						ipamConf.Addresses[i].Gateway = gwip
-					}
-				}
-			}
-		}
-	}
-
-	// CNI spec 0.2.0 and below supported only one v4 and v6 address
-	if numV4 > 1 || numV6 > 1 {
-		for _, v := range types020.SupportedVersions {
-			if n.CNIVersion == v {
-				return nil, "", fmt.Errorf("CNI version %v does not support more than 1 address per family", n.CNIVersion)
-			}
-		}
-	}
-
-	// Copy net name into IPAM so not to drag Net struct around
-	ipamConf.Name = n.Name
-
-	return ipamConf, n.CNIVersion, nil
-}
-
-func cmdAdd(args *skel.CmdArgs) error {
-	ipamConf, confVersion, err := loadIPAMConfig(args.StdinData, args.Args)
-	if err != nil {
-		return err
-	}
-
-	result := &current.Result{}
-	result.DNS = ipamConf.DNS
-	result.Routes = ipamConf.Routes
-	for _, v := range ipamConf.Addresses {
-		result.IPs = append(result.IPs, &current.IPConfig{
-			Version: v.Version,
-			Address: v.Address,
-			Gateway: v.Gateway})
-	}
-
-	macvlanCmdAdd(args, result)
-	return types.PrintResult(result, confVersion)
-}
-
 func cmdDel(args *skel.CmdArgs) error {
-	// Nothing required because of no resource allocation in static plugin.
 	macvlanCmdDel(args)
+
 	return nil
 }
