@@ -408,6 +408,25 @@ func loadIPConfig(ipc *IPConfig, podNamespace string) (*IP, map[string]IP, error
 	}
 }
 
+func macvlanCmdDel(args *skel.CmdArgs) error {
+	if args.Netns == "" {
+		return nil
+	}
+
+	// There is a netns so try to clean up. Delete can be called multiple times
+	// so don't return an error if the device is already removed.
+	err := ns.WithNetNSPath(args.Netns, func(_ ns.NetNS) error {
+		if err := ip.DelLinkByName(args.IfName); err != nil {
+			if err != ip.ErrLinkNotFound {
+				return err
+			}
+		}
+		return nil
+	})
+
+	return err
+}
+
 func macvlanCmdAdd(args *skel.CmdArgs, res *current.Result) error {
 	n, err := loadNetConf(&ClusterConf{}, args.StdinData)
 	if err != nil {
