@@ -333,7 +333,7 @@ func macvlanCmdAdd(args *skel.CmdArgs) error {
 
 	result.DNS = n.DNS
 
-	return nil
+	return types.PrintResult(result, n.CNIVersion)
 }
 
 func getMTUByName(ifName string) (int, error) {
