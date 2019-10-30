@@ -15,6 +15,7 @@ import (
 	"github.com/containernetworking/plugins/pkg/ns"
 	bv "github.com/containernetworking/plugins/pkg/utils/buildversion"
 	"github.com/containernetworking/plugins/pkg/utils/sysctl"
+	"github.com/coreos/go-iptables/iptables"
 	"github.com/j-keck/arping"
 	"github.com/vishvananda/netlink"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -296,7 +297,11 @@ func macvlanCmdAdd(args *skel.CmdArgs) error {
 	}()
 
 	ip, ipnet, err := net.ParseCIDR(n.IP.Addresses[0])
+	if err != nil {
+		return fmt.Errorf("unable to parse IP address %q: %v", n.IP.Addresses[0], err)
+	}
 	gw := net.ParseIP(n.IP.Gateway)
+	dest, _, err := net.ParseCIDR(n.IP.Destinations[0])
 	// Assume L2 interface only
 	result := &current.Result{CNIVersion: n.CNIVersion, Interfaces: []*current.Interface{macvlanInterface}}
 	result.IPs = append(result.IPs, &current.IPConfig{
@@ -325,6 +330,14 @@ func macvlanCmdAdd(args *skel.CmdArgs) error {
 				_ = arping.GratuitousArpOverIface(ipc.Address.IP, *contVeth)
 			}
 		}
+
+		ipt, err := iptables.New()
+		if err != nil {
+			return fmt.Errorf("failed to get IPTables: %v", err)
+		}
+		ipt.Append("nat", "PREROUTING", "-i", "eth0", "-j", "DNAT", "--to-destination", dest.String())
+		ipt.Append("nat", "POSTROUTING", "-o", args.IfName, "-j", "SNAT", "--to-source", ip.String())
+
 		return nil
 	})
 	if err != nil {
@@ -432,7 +445,7 @@ func createMacvlan(conf *NetConf, ifName string, netns ns.NetNS) (*current.Inter
 }
 
 func main() {
-	skel.PluginMain(cmdAdd, cmdCheck, cmdDel, version.All, bv.BuildString("openshift-egress"))
+	skel.PluginMain(cmdAdd, cmdCheck, cmdDel, version.All, bv.BuildString("egress-router"))
 }
 
 func cmdCheck(args *skel.CmdArgs) error {
